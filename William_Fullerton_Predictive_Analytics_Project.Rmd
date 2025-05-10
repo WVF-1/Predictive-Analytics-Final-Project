@@ -1,0 +1,651 @@
+---
+title: "William_Fullerton_Predictive_Analytics_Project"
+author: "William V. Fullerton"
+date: "2025-04-16"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load All Necessary Packages
+```{r}
+# Load required packages
+library(caret)      # For data splitting and model training
+library(pROC)       # For ROC analysis
+library(ggplot2)    # For data visualization
+library(biotools)   # For additional statistical tools
+library(readxl)     # For reading Excel files
+```
+
+
+#Read the Data
+```{r}
+# Read the dataset from the specified Excel file
+Pregnant <- read_xlsx("BabyShop.xlsx")
+
+# Check the structure of the data to understand its format
+str(Pregnant)
+```
+
+##Part One
+#Problem One
+```{r}
+# Convert relevant variables to factors for categorical analysis
+Pregnant$Implied_Gender <- factor(Pregnant$Implied_Gender)
+Pregnant$Home_Apt__PO_Box <- factor(Pregnant$Home_Apt__PO_Box)
+
+# Split the data into training and testing sets (80-20 split)
+set.seed(412)  # Set seed for reproducibility
+s <- sample(1:nrow(Pregnant), 0.8 * nrow(Pregnant))  # Randomly select indices for training set
+train <- Pregnant[s, ]  # 80% training set
+test <- Pregnant[-s, ]   # 20% testing set
+```
+
+#Problem Two
+```{r}
+# Fit a logistic regression model to the training set
+log.fit <- glm(PREGNANT ~ ., data = train, family = "binomial")
+
+# Display summary analysis of the model
+summary(log.fit)
+
+# Identify significant variables and refit the model with only those
+log.fit_significant <- glm(PREGNANT ~ Implied_Gender + Pregnancy_Test + Birth_Control + 
+                            Feminine_Hygiene + Folic_Acid + Prenatal_Vitamins + 
+                            Prenatal_Yoga + Ginger_Ale + Stopped_buying_ciggies + 
+                            Cigarettes + Smoking_Cessation + Stopped_buying_wine + 
+                            Wine + Maternity_Clothes, 
+                            data = train, family = "binomial")
+
+# Display summary of the new model
+summary(log.fit_significant)
+```
+
+#Problem Three
+```{r}
+# test the probabilities
+probs.test <- predict(log.fit, newdata = test, type = "response")
+
+# Create an roc model for the plot
+rocCurve <- roc(response = test$PREGNANT, predictor = probs.test)
+plot(rocCurve, legacy.axes = TRUE) # Plotting the curve
+
+# Area under the ROC curve
+auc(rocCurve)
+```
+
+**AUC Interpretation**
+##From the curve shown and the area underneath it calculated, we can see that this model is a good fit to the data. This is because the area under the curve is very close to one. Closer to 1 indicates that there is an overall higher rate of true positives (Sensitivity) and lower rate of false positives (1-Specificity). This higher AUC results in a more accurate model for predicting true positives while not compromising true negatives and minimizing false positives.
+
+#Bonus
+```{r}
+# Create a sequence of 200 threshold values evenly spaced between 0 and 1
+thresholds <- seq(0, 1, (1/200))
+
+# Initialize vectors to store sensitivity and specificity
+sensitivity <- numeric(length(thresholds))
+specificity <- numeric(length(thresholds))
+
+# Calculate sensitivity and specificity for each threshold
+for (i in 1:length(thresholds)) {
+  # Classify predictions based on the current threshold
+  pred.class <- ifelse(probs.test > thresholds[i], 1, 0)
+  
+  # Create confusion matrix
+  cm <- table(factor(pred.class, levels = c(1, 0)), factor(test$PREGNANT, levels = c(1, 0)))
+  
+  # Calculate sensitivity and specificity
+  sensitivity[i] <- cm[2, 2] / (cm[2, 2] + cm[1, 2])  # True Positives / (True Positives + False Negatives)
+  specificity[i] <- cm[1, 1] / (cm[1, 1] + cm[2, 1])  # True Negatives / (True Negatives + False Positives)
+}
+
+# Calculate 1 - specificity for the x-axis
+minus_spec <- 1 - specificity
+
+# Plot the custom ROC curve
+plot(minus_spec, sensitivity, type = "l", col = "blue", 
+     xlab = "1 - Specificity", 
+     ylab = "Sensitivity", 
+     main = "Will's ROC Curve")
+abline(0, 1, col = "red", lty = 2)  # Add a diagonal line for reference
+
+# Bonus: Calculate the area under the curve (AUC) using the trapezoidal rule
+auc_custom <- sum((minus_spec[-1]-minus_spec[-length(minus_spec)])*(sensitivity[-1] + sensitivity[-length(sensitivity)]) / 2) # Finds the area of the entire reference shape by summing a larger area than what is filled in and subtracting out the empty areas.
+
+# Print the AUC value
+cat("Area Under the Curve (AUC) from custom ROC:", auc_custom, "\n")
+```
+
+#Problem Four
+```{r}
+# Part(a) the cross plot analysis
+# Plot for finding the happy middle ground
+plot(rocCurve$thresholds, rocCurve$sensitivities,
+ylab = "Sens (open) / Spec (solid)", col = "hotpink", pch = 17)
+points(rocCurve$thresholds, rocCurve$specificities, col="blue", pch=20)
+
+# Plot Sensitivity, Specificity, PPV, and NPV
+PPV <- numeric(length(rocCurve$thresholds))
+NPV <- numeric(length(rocCurve$thresholds))
+
+for (i in 1:length(rocCurve$thresholds)) {
+      pred.test <- ifelse(probs.test > rocCurve$thresholds[i], 1, 0)
+      cm <- confusionMatrix(data = factor(pred.test, levels = c("1","0")),
+                      reference = factor(test$PREGNANT, levels = c("1","0")),
+                      positive = "1")
+      PPV[i] <- cm$byClass[3]
+      NPV[i] <- cm$byClass[4]
+}
+
+plot(rocCurve$thresholds, rocCurve$sensitivities,
+     main = "Metrics Cross Plot", col = "red", type = "l")
+lines(rocCurve$thresholds, rocCurve$specificities, col = "blue")
+lines(rocCurve$thresholds, PPV, col = "darkgreen")
+lines(rocCurve$thresholds, NPV, col = "violet")
+
+# Part(b) 
+# Data Frame for viewing the spec and sens values at different threshold levels
+baby_cat <- data.frame(thresh=rocCurve$thresholds, Sens=rocCurve$sensitivities,
+                      Spec=rocCurve$specificities,"1-Spec" = 1-rocCurve$specificities)
+
+# Part(c)
+# Isolate a specificity of 90% or greater
+baby_cat[baby_cat$Spec >= 0.9,]
+```
+**Discussion**
+#For the threshold value, 0.6408369 is the best based on the company’s goal of minimizing the risk of sending maternity ads to non-pregnant households. At this threshold, the specificity is 90.8%, meaning that 90.8% of non-pregnant households are correctly excluded from receiving ads. This is crucial for ensuring that false positives are kept to a minimum, as the company wants to avoid wasting resources on non-pregnant individuals, or upsetting customers which has the potential to lose the company money. While this threshold sacrifices some sensitivity (74.4%), this is necessary to avoid unnecessary resources being allocated to the wrong households. As the threshold values increase, sensitivity tends to decrease, as fewer pregnant individuals are identified as the threshold becomes stricter. Conversely, specificity increases, because the model becomes more cautious about predicting pregnancies, thus avoiding more non-pregnant households. This trade-off between sensitivity and specificity necessary for certain industries, where a stricter threshold reduces the number of false positives but also misses some true positives. In addition, positive predictive value (PPV) tends to increase as specificity rises, meaning that predictions of pregnancy are more likely to be correct, while negative predictive value (NPV) generally remains stable or slightly decreases. This pattern aligns with the expected behavior of the model, where higher thresholds improve precision and accuracy but at the cost of certain positive values.
+
+#Problem Five
+```{r}
+# Using the threshold value of 0.6408369	 for predictions
+# Part(a)
+# threshold test of 0.6408369	
+pred.test <- ifelse(probs.test > 0.6408369, 1, 0)
+
+# Part(b)
+# confusion matrix
+# by hand
+table(factor(pred.test, levels=c("1", "0")), factor(test$PREGNANT, levels=c("1", "0" )))
+
+# caret function
+cm <- confusionMatrix(data = factor(pred.test, levels = c("1","0")),
+                      reference = factor(test$PREGNANT, levels = c("1","0")),
+                      positive = "1")
+# look at the accuracy
+cm$overall[1]
+
+# look at the Sensitivity, Specificity, Positive Predicted Value, and Negative Predicted Values
+cm$byClass[c(1:4)]
+```
+
+**Accuracy, Sensitivity, Specificity, Positive Predicted Value, and Negative Predicted Values Interpretation**
+
+**Accuracy**
+#The overall accuracy of 0.832 shows that the model correctly classified 83.2% of both pregnant and non-pregnant households.
+
+**Sensitivity**
+#The sensitivity of 0.744 indicates that 74.4% of actual pregnancies were correctly identified by the model as pregnancies.
+
+**Specificity**
+#The specificity of 0.908 suggests that 90.8% of non-pregnant households were accurately classified as not pregnant.
+
+**Positive Predicted Value**
+#The positive predictive value (PPV) of 0.877 means that 87.7% of the predicted pregnancies were true positives, or that of the predicted pregant household 87.7% of them were truly pregnant.
+
+**Negative Predicted Value**
+#The negative predictive value (NPV) of 0.802 indicates that 80.2% of the households predicted as not pregnant were correctly classified.
+
+
+
+##Part Two
+#Problem One
+```{r}
+# k-fold cross validation over the chosen threshold value
+#(a) k = 10 folds
+k <- 10
+
+# Storage vectors for each
+Sensitivity <- numeric(k)
+Specificity <- numeric(k)
+PPV <- numeric(k)
+NPV <- numeric(k)
+Accuracy <- numeric(k)
+
+# set seed for reproducibility 
+set.seed(724)
+CV_folds <- createFolds(Pregnant$PREGNANT, k = k, returnTrain = TRUE)
+for (i in 1:k) {
+  folds <- CV_folds[[i]]
+  train <- Pregnant[folds,]
+  valid <- Pregnant[-folds,]
+  
+# New model with only significant variables
+log.fit <- glm(PREGNANT~Implied_Gender+Pregnancy_Test+Birth_Control+Feminine_Hygiene+Folic_Acid+Prenatal_Vitamins+Prenatal_Yoga+Ginger_Ale+Stopped_buying_ciggies+Cigarettes+Smoking_Cessation+Stopped_buying_wine+Wine+Maternity_Clothes, data = train, 
+               family = "binomial")
+# test the probabilities
+probs.test <- predict(log.fit, newdata = valid, type = "response")
+
+# threshold test of 0.5580630
+pred.test <- ifelse(probs.test > 0.6408369, 1, 0)
+
+# Part(b)
+# confusion matrix
+# by hand
+t <- table(factor(pred.test, levels=c("1", "0")), factor(valid$PREGNANT, levels=c("1", "0" )))
+
+# caret function
+cm <- confusionMatrix(data = factor(pred.test, levels = c("1","0")),
+                      reference = factor(valid$PREGNANT, levels = c("1","0")),
+                      positive = "1")
+# look at the Sensitivity, Specificity, Positive Predicted Value, and Negative Predicted Values
+Accuracy[i] <- cm$overall[1]
+Sensitivity[i] <- cm$byClass[1]
+Specificity[i] <- cm$byClass[2]
+PPV[i] <- cm$byClass[3]
+NPV[i] <- cm$byClass[4]
+}
+
+#(b)
+# Box plots of the predictors. 
+# Create a data frame for the metrics
+metrics_df <- data.frame(
+  Metric = rep(c("Accuracy", "Sensitivity", "Specificity", "PPV", "NPV"), each = k),
+  Value = c(Accuracy, Sensitivity, Specificity, PPV, NPV)
+)
+
+# Create the boxplot
+ggplot(metrics_df, aes(x = Metric, y = Value, fill = Metric)) +
+  geom_boxplot() +
+  labs(title = "Simultaneous Box Plots under Threshold",
+       x = "Model Metrics",
+       y = "Percentage Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("steelblue", "limegreen", "hotpink", "violet", "orange"))
+
+#(c)
+# summary measure for each metric
+# Accuracy
+summary(Accuracy)
+sd(Accuracy)
+
+# Sensitivity
+summary(Sensitivity)
+sd(Sensitivity)
+
+# Specificity
+summary(Specificity)
+sd(Specificity)
+
+# PPV
+summary(PPV)
+sd(PPV)
+
+# npv
+summary(NPV)
+sd(NPV)
+```
+**Discussion**
+#This model demonstrates strong overall performance, with high accuracy, positive predictive value (PPV), and specificity. However, it also shows low sensitivity and negative predictive value (NPV). These results are consistent with the use of a relatively high threshold, which tends to favor correct identification of negative cases (non-pregnant households) while missing more positive cases (pregnant households).The boxplots further illustrate these patterns, showing minimal variation in most performance metrics. Sensitivity displays the greatest variability, with PPV also exhibiting some spread. This variability is expected, as higher thresholds typically result in fewer predicted positives, which naturally leads to lower and more unstable sensitivity. PPV, while generally high, may also vary more due to the smaller number of predicted positives.Notably, the mean values of each performance metric closely align with those observed earlier in Problem One, Parts Four and Five. This consistency suggests that the model remains stable across resampling procedures and continues to reflect the trade-offs inherent in threshold selection.
+
+# Part(b)
+# Other three chosen thresholds: 0.4531614	0.6959813 0.9856787	
+
+# Look at 0 to have a refence for extemely small threshold and how the values will adapt with thresholds of higher values. 
+
+##0
+```{r}
+# k-fold cross validation over the chosen threshold value
+#(a) k = 10 folds
+k <- 10
+
+# Storage vectors for each
+Sensitivity <- numeric(k)
+Specificity <- numeric(k)
+PPV <- numeric(k)
+NPV <- numeric(k)
+Accuracy <- numeric(k)
+# set seed for reproducibility 
+set.seed(724)
+CV_folds <- createFolds(Pregnant$PREGNANT, k = k, returnTrain = TRUE)
+for (i in 1:k) {
+  folds <- CV_folds[[i]]
+  train <- Pregnant[folds,]
+  valid <- Pregnant[-folds,]
+  
+# New model with only significant variables
+log.fit <- glm(PREGNANT~Implied_Gender+Pregnancy_Test+Birth_Control+Feminine_Hygiene+Folic_Acid+Prenatal_Vitamins+Prenatal_Yoga+Ginger_Ale+Stopped_buying_ciggies+Cigarettes+Smoking_Cessation+Stopped_buying_wine+Wine+Maternity_Clothes, data = train, 
+               family = "binomial")
+# test the probabilities
+probs.test <- predict(log.fit, newdata = valid, type = "response")
+
+# threshold test of 0
+pred.test <- ifelse(probs.test > 0, 1, 0)
+
+# Part(b)
+# confusion matrix
+# by hand
+t <- table(factor(pred.test, levels=c("1", "0")), factor(valid$PREGNANT, levels=c("1", "0" )))
+
+# caret function
+cm <- confusionMatrix(data = factor(pred.test, levels = c("1","0")),
+                      reference = factor(valid$PREGNANT, levels = c("1","0")),
+                      positive = "1")
+# look at the Sensitivity, Specificity, Positive Predicted Value, and Negative Predicted Values
+Accuracy[i] <- cm$overall[1]
+Sensitivity[i] <- cm$byClass[1]
+Specificity[i] <- cm$byClass[2]
+PPV[i] <- cm$byClass[3]
+NPV[i] <- cm$byClass[4]
+}
+
+#(b)
+# Box plots of the predictors. 
+# Create a data frame for the metrics
+metrics_df <- data.frame(
+  Metric = rep(c("Accuracy", "Sensitivity", "Specificity", "PPV", "NPV"), each = k),
+  Value = c(Accuracy, Sensitivity, Specificity, PPV, NPV)
+)
+
+# Create the boxplot
+ggplot(metrics_df, aes(x = Metric, y = Value, fill = Metric)) +
+  geom_boxplot() +
+  labs(title = "Simultaneous Box Plots under Threshold",
+       x = "Model Metrics",
+       y = "Percentage Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("steelblue", "limegreen", "hotpink", "violet", "orange"))
+
+#(c)
+# summary measure for each metric
+# Accuracy
+summary(Accuracy)
+sd(Accuracy)
+
+# Sensitivity
+summary(Sensitivity)
+sd(Sensitivity)
+
+# Specificity
+summary(Specificity)
+sd(Specificity)
+
+# PPV
+summary(PPV)
+sd(PPV)
+
+# npv
+summary(NPV)
+sd(NPV)
+```
+
+
+##0.4531614
+```{r}
+# k-fold cross validation over the chosen threshold value
+#(a) k = 10 folds
+k <- 10
+
+# Storage vectors for each
+Sensitivity <- numeric(k)
+Specificity <- numeric(k)
+PPV <- numeric(k)
+NPV <- numeric(k)
+Accuracy <- numeric(k)
+# set seed for reproducibility 
+set.seed(724)
+CV_folds <- createFolds(Pregnant$PREGNANT, k = k, returnTrain = TRUE)
+for (i in 1:k) {
+  folds <- CV_folds[[i]]
+  train <- Pregnant[folds,]
+  valid <- Pregnant[-folds,]
+  
+# New model with only significant variables
+log.fit <- glm(PREGNANT~Implied_Gender+Pregnancy_Test+Birth_Control+Feminine_Hygiene+Folic_Acid+Prenatal_Vitamins+Prenatal_Yoga+Ginger_Ale+Stopped_buying_ciggies+Cigarettes+Smoking_Cessation+Stopped_buying_wine+Wine+Maternity_Clothes, data = train, 
+               family = "binomial")
+# test the probabilities
+probs.test <- predict(log.fit, newdata = valid, type = "response")
+
+# threshold test of 0.4531614
+pred.test <- ifelse(probs.test > 0.4531614, 1, 0)
+
+# Part(b)
+# confusion matrix
+# by hand
+t <- table(factor(pred.test, levels=c("1", "0")), factor(valid$PREGNANT, levels=c("1", "0" )))
+
+# caret function
+cm <- confusionMatrix(data = factor(pred.test, levels = c("1","0")),
+                      reference = factor(valid$PREGNANT, levels = c("1","0")),
+                      positive = "1")
+# look at the Sensitivity, Specificity, Positive Predicted Value, and Negative Predicted Values
+Accuracy[i] <- cm$overall[1]
+Sensitivity[i] <- cm$byClass[1]
+Specificity[i] <- cm$byClass[2]
+PPV[i] <- cm$byClass[3]
+NPV[i] <- cm$byClass[4]
+}
+
+#(b)
+# Box plots of the predictors. 
+# Create a data frame for the metrics
+metrics_df <- data.frame(
+  Metric = rep(c("Accuracy", "Sensitivity", "Specificity", "PPV", "NPV"), each = k),
+  Value = c(Accuracy, Sensitivity, Specificity, PPV, NPV)
+)
+
+# Create the boxplot
+ggplot(metrics_df, aes(x = Metric, y = Value, fill = Metric)) +
+  geom_boxplot() +
+  labs(title = "Simultaneous Box Plots under Threshold",
+       x = "Model Metrics",
+       y = "Percentage Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("steelblue", "limegreen", "hotpink", "violet", "orange"))
+
+#(c)
+# summary measure for each metric
+# Accuracy
+summary(Accuracy)
+sd(Accuracy)
+
+# Sensitivity
+summary(Sensitivity)
+sd(Sensitivity)
+
+# Specificity
+summary(Specificity)
+sd(Specificity)
+
+# PPV
+summary(PPV)
+sd(PPV)
+
+# npv
+summary(NPV)
+sd(NPV)
+```
+
+##0.6959813
+```{r}
+# k-fold cross validation over the chosen threshold value
+#(a) k = 10 folds
+k <- 10
+
+# Storage vectors for each
+Sensitivity <- numeric(k)
+Specificity <- numeric(k)
+PPV <- numeric(k)
+NPV <- numeric(k)
+Accuracy <- numeric(k)
+# set seed for reproducibility 
+set.seed(724)
+CV_folds <- createFolds(Pregnant$PREGNANT, k = k, returnTrain = TRUE)
+for (i in 1:k) {
+  folds <- CV_folds[[i]]
+  train <- Pregnant[folds,]
+  valid <- Pregnant[-folds,]
+  
+# New model with only significant variables
+log.fit <- glm(PREGNANT~Implied_Gender+Pregnancy_Test+Birth_Control+Feminine_Hygiene+Folic_Acid+Prenatal_Vitamins+Prenatal_Yoga+Ginger_Ale+Stopped_buying_ciggies+Cigarettes+Smoking_Cessation+Stopped_buying_wine+Wine+Maternity_Clothes, data = train, 
+               family = "binomial")
+# test the probabilities
+probs.test <- predict(log.fit, newdata = valid, type = "response")
+
+# threshold test of 0.6959813
+pred.test <- ifelse(probs.test > 0.6959813, 1, 0)
+
+# Part(b)
+# confusion matrix
+# by hand
+t <- table(factor(pred.test, levels=c("1", "0")), factor(valid$PREGNANT, levels=c("1", "0" )))
+
+# caret function
+cm <- confusionMatrix(data = factor(pred.test, levels = c("1","0")),
+                      reference = factor(valid$PREGNANT, levels = c("1","0")),
+                      positive = "1")
+# look at the Sensitivity, Specificity, Positive Predicted Value, and Negative Predicted Values
+Accuracy[i] <- cm$overall[1]
+Sensitivity[i] <- cm$byClass[1]
+Specificity[i] <- cm$byClass[2]
+PPV[i] <- cm$byClass[3]
+NPV[i] <- cm$byClass[4]
+}
+
+#(b)
+# Box plots of the predictors. 
+# Create a data frame for the metrics
+metrics_df <- data.frame(
+  Metric = rep(c("Accuracy", "Sensitivity", "Specificity", "PPV", "NPV"), each = k),
+  Value = c(Accuracy, Sensitivity, Specificity, PPV, NPV)
+)
+
+# Create the boxplot
+ggplot(metrics_df, aes(x = Metric, y = Value, fill = Metric)) +
+  geom_boxplot() +
+  labs(title = "Simultaneous Box Plots under Threshold",
+       x = "Model Metrics",
+       y = "Percentage Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("steelblue", "limegreen", "hotpink", "violet", "orange"))
+
+#(c)
+# summary measure for each metric
+# Accuracy
+summary(Accuracy)
+sd(Accuracy)
+
+# Sensitivity
+summary(Sensitivity)
+sd(Sensitivity)
+
+# Specificity
+summary(Specificity)
+sd(Specificity)
+
+# PPV
+summary(PPV)
+sd(PPV)
+
+# npv
+summary(NPV)
+sd(NPV)
+```
+
+
+##0.9875295
+```{r}
+# k-fold cross validation over the chosen threshold value
+#(a) k = 10 folds
+k <- 10
+
+# Storage vectors for each
+Sensitivity <- numeric(k)
+Specificity <- numeric(k)
+PPV <- numeric(k)
+NPV <- numeric(k)
+Accuracy <- numeric(k)
+# set seed for reproducibility 
+set.seed(724)
+CV_folds <- createFolds(Pregnant$PREGNANT, k = k, returnTrain = TRUE)
+for (i in 1:k) {
+  folds <- CV_folds[[i]]
+  train <- Pregnant[folds,]
+  valid <- Pregnant[-folds,]
+  
+# New model with only significant variables
+log.fit <- glm(PREGNANT~Implied_Gender+Pregnancy_Test+Birth_Control+Feminine_Hygiene+Folic_Acid+Prenatal_Vitamins+Prenatal_Yoga+Ginger_Ale+Stopped_buying_ciggies+Cigarettes+Smoking_Cessation+Stopped_buying_wine+Wine+Maternity_Clothes, data = train, 
+               family = "binomial")
+# test the probabilities
+probs.test <- predict(log.fit, newdata = valid, type = "response")
+
+# threshold test of 0.9875295
+pred.test <- ifelse(probs.test > 0.9875295, 1, 0)
+
+# Part(b)
+# confusion matrix
+# by hand
+t <- table(factor(pred.test, levels=c("1", "0")), factor(valid$PREGNANT, levels=c("1", "0" )))
+
+# caret function
+cm <- confusionMatrix(data = factor(pred.test, levels = c("1","0")),
+                      reference = factor(valid$PREGNANT, levels = c("1","0")),
+                      positive = "1")
+# look at the Sensitivity, Specificity, Positive Predicted Value, and Negative Predicted Values
+Accuracy[i] <- cm$overall[1]
+Sensitivity[i] <- cm$byClass[1]
+Specificity[i] <- cm$byClass[2]
+PPV[i] <- cm$byClass[3]
+NPV[i] <- cm$byClass[4]
+}
+
+#(b)
+# Box plots of the predictors. 
+# Create a data frame for the metrics
+metrics_df <- data.frame(
+  Metric = rep(c("Accuracy", "Sensitivity", "Specificity", "PPV", "NPV"), each = k),
+  Value = c(Accuracy, Sensitivity, Specificity, PPV, NPV)
+)
+
+# Create the boxplot
+ggplot(metrics_df, aes(x = Metric, y = Value, fill = Metric)) +
+  geom_boxplot() +
+  labs(title = "Simultaneous Box Plots under Threshold",
+       x = "Model Metrics",
+       y = "Percentage Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("steelblue", "limegreen", "hotpink", "violet", "orange"))
+
+#(c)
+# summary measure for each metric
+# Accuracy
+summary(Accuracy)
+sd(Accuracy)
+
+# Sensitivity
+summary(Sensitivity)
+sd(Sensitivity)
+
+# Specificity
+summary(Specificity)
+sd(Specificity)
+
+# PPV
+summary(PPV)
+sd(PPV)
+
+# npv
+summary(NPV)
+sd(NPV)
+```
+
+**Discussion**
+#The four threshold values tested yield notably different model performances. At extreme thresholds of 0% and 98.7%, the model begins to break down. With a threshold of 0%, accuracy drops below 50%, indicating that random guessing would perform better. Additionally, all other performance metrics are significantly off. At a 98.7% threshold, although accuracy is slightly above 50%, the model overwhelmingly predicts non-pregnant households. This would render a targeted ad campaign ineffective, as very few pregnant households would be identified. This behavior is expected, as the classification threshold directly determines how the model assigns positive versus negative predictions. At extreme thresholds, performance becomes skewed, highlighting the importance of careful threshold selection. 
+
+#The intermediate thresholds of 45% and 70% perform better, but still not as well as the originally chosen threshold of 64.8%. The 45% threshold shows inflated sensitivity due to an increased number of false positives, which reduces the model’s precision despite stable accuracy. Conversely, the 70% threshold reveals lower specificity, which is somewhat unexpected, as specificity typically increases with higher thresholds. This may be influenced by class imbalance or particular outliers in the data.Overall, the original threshold of 64.8% appears to strike the best balance between sensitivity and specificity. It optimally identifies pregnant households while minimizing the risk of incorrectly targeting non-pregnant ones—an important consideration for the effectiveness and efficiency of a marketing campaign.
